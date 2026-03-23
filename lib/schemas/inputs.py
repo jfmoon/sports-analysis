@@ -132,12 +132,25 @@ class ActionNetworkGame(BaseModel):
 class ActionNetworkSnapshot(BaseModel):
     updated: datetime
     source: Optional[str] = None
-    odds: list[ActionNetworkGame]       # top-level key is "odds"
+    odds: Any = []                      # empty dict {} when no games, list when games exist
+
+    @field_validator("odds", mode="before")
+    @classmethod
+    def normalize_odds(cls, v):
+        """Scraper writes {} instead of [] when no active lines. Normalize to list."""
+        if isinstance(v, dict):
+            return list(v.values()) if v else []
+        return v
+
+    def get_games(self) -> list[ActionNetworkGame]:
+        if not isinstance(self.odds, list):
+            return []
+        return [ActionNetworkGame(**g) if isinstance(g, dict) else g for g in self.odds]
 
     def get_game(self, home: str, away: str) -> Optional[ActionNetworkGame]:
         h, a = home.lower(), away.lower()
         return next(
-            (g for g in self.odds
+            (g for g in self.get_games()
              if g.home_team and g.away_team
              and g.home_team.lower() == h and g.away_team.lower() == a),
             None
