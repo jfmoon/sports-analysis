@@ -4,9 +4,11 @@ import sys
 from datetime import datetime, timezone
 
 from lib.storage import AnalysisStorage
-from lib.logic.wta_mapper import map_stats_to_ratings
 from lib.logic.wta_classifier import classify_player
-from lib.schemas.wta import WTAArchetypeSnapshot
+from lib.schemas.wta import WTARatings, WTAArchetypeSnapshot
+
+# wta_mapper is available for future use with raw-stat data sources:
+# from lib.logic.wta_mapper import map_stats_to_ratings
 
 
 def main() -> None:
@@ -74,7 +76,10 @@ def main() -> None:
                 )
                 continue
 
-            ratings = map_stats_to_ratings(p.get("stats", {}))
+            # Scraper pre-computes all 12 dimensions as 1-10 integers.
+            # Pass through directly. Use map_stats_to_ratings() instead
+            # for any future source that provides raw percentages.
+            ratings = WTARatings(**p.get("ratings", {}))
             player_result = classify_player(
                 name=name,
                 ratings=ratings,
