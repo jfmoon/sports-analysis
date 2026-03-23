@@ -16,7 +16,7 @@ GCS paths:
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, field_validator
 
 
@@ -27,24 +27,23 @@ from pydantic import BaseModel, field_validator
 class KenPomTeam(BaseModel):
     name: str
     kenpom_rank: int
-    adj_o: float            # Adjusted offensive efficiency
-    adj_d: float            # Adjusted defensive efficiency
-    adj_t: float            # Adjusted tempo
-    three_p_pct: float      # 3-point percentage
-    three_par: float        # 3-point attempt rate
-    ftr: float              # Free throw rate
-    to_pct: float           # Turnover percentage
-    orb_pct: float          # Offensive rebound percentage
-    block_pct: float        # Block percentage
-    steal_pct: float        # Steal percentage
-    opp_3p_pct: float       # Opponent 3-point percentage allowed
-    experience: float       # Roster experience (years)
+    adj_o: float
+    adj_d: float
+    adj_t: float
+    three_p_pct: float
+    three_par: float
+    ftr: float
+    to_pct: float
+    orb_pct: float
+    block_pct: float
+    steal_pct: float
+    opp_3p_pct: float
+    experience: float
     source: str
     fetched_at: datetime
 
     @property
     def adj_em(self) -> float:
-        """Adjusted efficiency margin — primary KenPom composite."""
         return round(self.adj_o - self.adj_d, 1)
 
 
@@ -54,51 +53,75 @@ class KenPomSnapshot(BaseModel):
     teams: list[KenPomTeam]
 
     def get_team(self, name: str) -> Optional[KenPomTeam]:
-        """Case-insensitive team lookup by name."""
         name_lower = name.lower()
         return next((t for t in self.teams if t.name.lower() == name_lower), None)
 
 
 # ---------------------------------------------------------------------------
 # CBB — ESPN scores (cbb/scores.json)
+# Actual fields: espn_id, date, state, completed,
+#                t1_name, t1_score, t1_winner,
+#                t2_name, t2_score, t2_winner,
+#                source, fetched_at
 # ---------------------------------------------------------------------------
 
 class ESPNGame(BaseModel):
-    home_team: str
-    away_team: str
-    home_score: Optional[int] = None
-    away_score: Optional[int] = None
-    status: str             # "final" | "in_progress" | "scheduled"
+    espn_id: str
+    date: Optional[str] = None
+    state: Optional[str] = None         # "pre" | "in" | "post"
+    completed: Optional[bool] = None
+    t1_name: str                        # home team
+    t1_score: Optional[int] = None
+    t1_winner: Optional[bool] = None
+    t2_name: str                        # away team
+    t2_score: Optional[int] = None
+    t2_winner: Optional[bool] = None
     source: str
     fetched_at: datetime
+
+    @property
+    def home_team(self) -> str:
+        return self.t1_name
+
+    @property
+    def away_team(self) -> str:
+        return self.t2_name
+
+    @property
+    def is_final(self) -> bool:
+        return self.completed is True
 
 
 class ESPNSnapshot(BaseModel):
     updated: datetime
+    game_count: int
     games: list[ESPNGame]
 
-    def get_game(self, home: str, away: str) -> Optional[ESPNGame]:
-        h, a = home.lower(), away.lower()
+    def get_game(self, t1: str, t2: str) -> Optional[ESPNGame]:
+        a, b = t1.lower(), t2.lower()
         return next(
             (g for g in self.games
-             if g.home_team.lower() == h and g.away_team.lower() == a),
+             if g.t1_name.lower() == a and g.t2_name.lower() == b),
             None
         )
 
 
 # ---------------------------------------------------------------------------
 # CBB — Action Network odds (cbb/odds.json)
+# Top-level key is "odds" not "games"
 # ---------------------------------------------------------------------------
 
 class ActionNetworkGame(BaseModel):
-    home_team: str
-    away_team: str
-    spread: Optional[float] = None      # Negative = home favored
-    total: Optional[float] = None       # Over/under line
-    home_ml: Optional[float] = None     # Moneyline (American format)
+    home_team: Optional[str] = None
+    away_team: Optional[str] = None
+    spread: Optional[float] = None
+    total: Optional[float] = None
+    home_ml: Optional[float] = None
     away_ml: Optional[float] = None
-    source: str
-    fetched_at: datetime
+    source: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+
+    model_config = {"extra": "allow"}  # absorb any extra fields gracefully
 
     @field_validator("home_ml", "away_ml", mode="before")
     @classmethod
@@ -108,13 +131,15 @@ class ActionNetworkGame(BaseModel):
 
 class ActionNetworkSnapshot(BaseModel):
     updated: datetime
-    games: list[ActionNetworkGame]
+    source: Optional[str] = None
+    odds: list[ActionNetworkGame]       # top-level key is "odds"
 
     def get_game(self, home: str, away: str) -> Optional[ActionNetworkGame]:
         h, a = home.lower(), away.lower()
         return next(
-            (g for g in self.games
-             if g.home_team.lower() == h and g.away_team.lower() == a),
+            (g for g in self.odds
+             if g.home_team and g.away_team
+             and g.home_team.lower() == h and g.away_team.lower() == a),
             None
         )
 
@@ -151,7 +176,7 @@ class TennisOddsMatch(BaseModel):
     tournament: str
     p1_name: str
     p2_name: str
-    p1_ml: float            # Decimal odds (European format)
+    p1_ml: float
     p2_ml: float
     bookmaker: str
     commence_time: datetime
@@ -160,7 +185,6 @@ class TennisOddsMatch(BaseModel):
 
     @property
     def p1_implied_prob(self) -> float:
-        """Implied win probability for p1."""
         return round(1 / self.p1_ml, 4)
 
     @property
@@ -169,12 +193,10 @@ class TennisOddsMatch(BaseModel):
 
     @property
     def vig(self) -> float:
-        """Overround — excess above 1.0 is the book's margin."""
         return round(self.p1_implied_prob + self.p2_implied_prob - 1.0, 4)
 
     @property
     def no_vig_p1(self) -> float:
-        """Vig-removed implied probability for p1."""
         total = self.p1_implied_prob + self.p2_implied_prob
         return round(self.p1_implied_prob / total, 4)
 
@@ -202,21 +224,47 @@ class TennisOddsSnapshot(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Tennis — TennisAbstract players (tennis/players.json)
+# Actual fields: name, slug, country, emoji, rank, lastUpdated,
+#                ratings, elo, recentMatches, dataAvailability
 # ---------------------------------------------------------------------------
 
 class TennisPlayer(BaseModel):
     name: str
     slug: str
+    country: Optional[str] = None
+    emoji: Optional[str] = None
     rank: Optional[int] = None
-    serve_pct: Optional[float] = None       # First serve in percentage
-    return_pct: Optional[float] = None      # Return points won percentage
-    surface_stats: Optional[dict] = None    # Keyed by surface: hard/clay/grass
-    source: str
-    fetched_at: datetime
+    lastUpdated: Optional[str] = None
+    ratings: Optional[dict] = None
+    elo: Optional[dict] = None
+    recentMatches: Optional[list] = None
+    dataAvailability: Optional[dict] = None
+
+    model_config = {"extra": "allow"}  # absorb any future TA fields
+
+    @property
+    def serve_rating(self) -> Optional[float]:
+        """Pull serve rating from ratings dict if available."""
+        if self.ratings:
+            return self.ratings.get("serve")
+        return None
+
+    @property
+    def return_rating(self) -> Optional[float]:
+        if self.ratings:
+            return self.ratings.get("return")
+        return None
+
+    @property
+    def elo_rating(self) -> Optional[float]:
+        if self.elo:
+            return self.elo.get("overall")
+        return None
 
 
 class TennisAbstractSnapshot(BaseModel):
     updated: datetime
+    player_count: int
     players: list[TennisPlayer]
 
     def get_player(self, name: str) -> Optional[TennisPlayer]:
@@ -239,7 +287,7 @@ class SofascoreMatch(BaseModel):
     tournament: str
     p1_name: str
     p2_name: str
-    status: Optional[str] = None    # "finished" | "inprogress" | "notstarted"
+    status: Optional[str] = None
     p1_sets: Optional[int] = None
     p2_sets: Optional[int] = None
     source: str
@@ -253,7 +301,6 @@ class SofascoreSnapshot(BaseModel):
 
 # ---------------------------------------------------------------------------
 # GCS path → snapshot model registry
-# Used by storage.py to auto-select the correct parser per trigger path
 # ---------------------------------------------------------------------------
 
 GCS_PATH_REGISTRY: dict[str, type] = {
