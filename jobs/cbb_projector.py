@@ -3,7 +3,8 @@ import sys
 import logging
 from datetime import datetime, timezone
 from lib.storage import AnalysisStorage
-from lib.team_names import TeamNameResolver
+# lib.team_names intentionally removed — team names are now normalized
+# on the scraper side via scrapers/cbb/names.py before writing to GCS.
 
 
 def setup_logger(name):
@@ -83,7 +84,6 @@ def main():
         for t in teams:
             norms = {f: get_norm_val(getattr(t, f, None), *bounds.get(f, (None, None))) for f in fields}
 
-            # Derived metrics (strict population normalization)
             norms["net_rtg"] = get_norm_val(
                 t.adj_o - t.adj_d if (t.adj_o is not None and t.adj_d is not None) else None,
                 rtg_min, rtg_max,
@@ -96,7 +96,6 @@ def main():
                 t.kenpom_rank, *bounds.get("kenpom_rank", (None, None)), inverted=True
             )
 
-            # Inverse stat keys used by weight dicts
             if norms.get("adj_d") is not None:
                 norms["adj_d_inv"] = 1.0 - norms["adj_d"]
             if norms.get("to_pct") is not None:
@@ -104,7 +103,6 @@ def main():
             if norms.get("opp_3p_pct") is not None:
                 norms["opp_3p_pct_inv"] = 1.0 - norms["opp_3p_pct"]
 
-            # JBScore
             jb_weights = {
                 "adj_o": 0.15, "adj_d_inv": 0.10, "net_rtg": 0.10, "three_p_pct": 0.10,
                 "three_par": 0.07, "ftr": 0.07, "to_pct_inv": 0.07, "steal_pct": 0.05,
@@ -126,7 +124,6 @@ def main():
             if is_fallback:
                 logger.warning(f"Fallback JBScore used for {t.name}")
 
-            # Stability Score
             stab_weights = {"adj_d_inv": 0.40, "to_pct_inv": 0.25, "ftr": 0.20, "experience": 0.15}
             stab_raw = compute_weighted_score(stab_weights, norms)
             stability = round(stab_raw * 100, 1) if stab_raw is not None else 50.0
@@ -142,18 +139,24 @@ def main():
             }
 
         # 3. Game Edge Calculation
-        resolver = TeamNameResolver(list(team_metrics.keys()), logger)
+        # Team names are now pre-normalized on the scraper side — direct dict lookup only.
+        # If a name misses, log it as a scraper normalization gap to fix in scrapers/cbb/names.py.
         games = []
-        odds_list = getattr(odds_snap, "odds", [])
-        if not isinstance(odds_list, list):
-            odds_list = []
+        skipped = 0
+        odds_list = odds_snap.get_games()
 
         for o in odds_list:
-            h_name = resolver.resolve(o.home_team)
-            a_name = resolver.resolve(o.away_team)
+            h_name = o.home_team
+            a_name = o.away_team
 
-            if not h_name or not a_name:
-                logger.warning(f"Resolution failed for {o.home_team} vs {o.away_team}")
+            if h_name not in team_metrics or a_name not in team_metrics:
+                skipped += 1
+                logger.warning(
+                    f"Name mismatch — no KenPom entry for: "
+                    f"{'home=' + repr(h_name) if h_name not in team_metrics else ''}"
+                    f"{'away=' + repr(a_name) if a_name not in team_metrics else ''}. "
+                    f"Add to scrapers/cbb/names.py ALIAS_MAP if this persists."
+                )
                 continue
 
             h, a = team_metrics[h_name], team_metrics[a_name]
@@ -169,7 +172,6 @@ def main():
             else:
                 label = f"No edge (market {o.spread:.1f}, model {model_spread:+.1f})"
 
-            # Upset score — signed, range -100 to +100. Negative means dog has no advantage.
             upset_score = None
             if abs(jb_delta) > 5:
                 dog, fav = (a, h) if jb_delta > 0 else (h, a)
@@ -202,6 +204,24 @@ def main():
                 "away_ml": o.away_ml,
             })
 
+        # ── Join health guard ─────────────────────────────────────────────────
+        # If >15% of games fail to match, something is wrong at the scraper
+        # normalization layer — raise to trigger a pipeline alert rather than
+        # silently writing degraded output.
+        total_games = len(games) + skipped
+        if total_games > 0 and skipped > 0:
+            skip_rate = skipped / total_games
+            logger.info(
+                f"Join stats: {len(games)} matched, {skipped} skipped ({skip_rate:.1%}). "
+                f"Fix any persistent misses in scrapers/cbb/names.py ALIAS_MAP."
+            )
+            if skip_rate > 0.15 or len(games) == 0:
+                raise RuntimeError(
+                    f"Critical CBB name mismatch rate: {skip_rate:.1%} "
+                    f"({skipped}/{total_games} games skipped). "
+                    f"Check scrapers/cbb/names.py ALIAS_MAP."
+                )
+
         # 4. Output Construction
         sorted_games = sorted(games, key=lambda x: abs(x["spread_edge"]), reverse=True)
         output = {
@@ -214,6 +234,7 @@ def main():
                 "source_updated": getattr(kenpom, "updated", None),
                 "odds_updated": getattr(odds_snap, "updated", None),
                 "odds_games_found": len(sorted_games),
+                "odds_games_skipped": skipped,
             },
             "data": {
                 "updated": kenpom.updated,

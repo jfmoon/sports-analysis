@@ -5,20 +5,17 @@ from datetime import datetime, timezone
 
 from lib.storage import AnalysisStorage
 from lib.logic.wta_classifier import classify_player
+from lib.logic.wta_mapper import compute_ratings_from_raw
 from lib.schemas.wta import WTARatings, WTAArchetypeSnapshot
-
-# wta_mapper is available for future use with raw-stat data sources:
-# from lib.logic.wta_mapper import map_stats_to_ratings
 
 
 def main() -> None:
     # ------------------------------------------------------------------ #
-    # Local test env overrides — must come before logging init so that    #
-    # TRIGGER_MESSAGE_ID is set before msg_id is read.                    #
+    # Local test env overrides                                             #
     # ------------------------------------------------------------------ #
     if not os.getenv("TRIGGER_GCS_BUCKET"):
         os.environ.setdefault("TRIGGER_GCS_BUCKET", "sports-data-scraper-491116")
-        os.environ.setdefault("TRIGGER_GCS_PATH", "wta/raw_stats.json")
+        os.environ.setdefault("TRIGGER_GCS_PATH", "tennis/players.json")
         os.environ.setdefault("TRIGGER_GCS_GEN", "0")
         os.environ.setdefault("TRIGGER_MESSAGE_ID", "manual-local-smoke-test")
 
@@ -42,8 +39,6 @@ def main() -> None:
         logger.error(f"Failed to read trigger snapshot: {e}")
         sys.exit(1)
 
-    # Strict schema check — we expect a 'players' key from the WTA scraper.
-    # If the key is missing, log available keys to aid debugging.
     raw_players = input_data.get("players")
     if raw_players is None:
         logger.error(
@@ -65,6 +60,8 @@ def main() -> None:
     # 2. Process each player                                               #
     # ------------------------------------------------------------------ #
     processed_players = []
+    legacy_count = 0
+    raw_stats_count = 0
 
     for p in raw_players:
         try:
@@ -76,10 +73,29 @@ def main() -> None:
                 )
                 continue
 
-            # Scraper pre-computes all 12 dimensions as 1-10 integers.
-            # Pass through directly. Use map_stats_to_ratings() instead
-            # for any future source that provides raw percentages.
-            ratings = WTARatings(**p.get("ratings", {}))
+            # ── Rating resolution: raw_stats (new) → ratings (legacy) ──
+            # New scraper output contains raw_stats (float percentages).
+            # Legacy GCS files contain pre-scored ratings (1-10 ints).
+            # Use raw_stats when present; fall back to ratings for any
+            # files written before the 2026-03-23 schema migration.
+            raw_stats = p.get("raw_stats")
+            legacy_ratings = p.get("ratings")
+
+            if raw_stats:
+                # New path: compute ratings from raw floats
+                computed = compute_ratings_from_raw(raw_stats)
+                ratings = WTARatings(**computed)
+                raw_stats_count += 1
+            elif legacy_ratings:
+                # Legacy path: ratings were pre-computed by the scraper
+                ratings = WTARatings(**legacy_ratings)
+                legacy_count += 1
+                logger.debug(f"[legacy] Using pre-scored ratings for '{name}'")
+            else:
+                # No data at all — default all dimensions to 5
+                ratings = WTARatings()
+                logger.warning(f"No ratings or raw_stats for '{name}' — defaulting all to 5")
+
             player_result = classify_player(
                 name=name,
                 ratings=ratings,
@@ -90,8 +106,16 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"Error processing player '{p.get('name', '?')}': {e}")
 
+    if legacy_count > 0:
+        logger.warning(
+            f"{legacy_count} player(s) used legacy pre-scored ratings. "
+            f"These are from GCS files written before the raw_stats migration. "
+            f"They will resolve naturally as the scraper re-runs."
+        )
+
     logger.info(
-        f"Classification complete: {len(processed_players)}/{len(raw_players)} players processed."
+        f"Classification complete: {len(processed_players)}/{len(raw_players)} players processed "
+        f"({raw_stats_count} via raw_stats, {legacy_count} via legacy ratings)."
     )
 
     # ------------------------------------------------------------------ #
@@ -103,7 +127,6 @@ def main() -> None:
         players=processed_players,
     )
 
-    # mode="json" ensures datetime -> ISO string throughout the object graph.
     storage.write_processed("wta/archetypes.json", snapshot.model_dump(mode="json"))
     logger.info("Successfully exported WTA archetypes to processed bucket.")
 

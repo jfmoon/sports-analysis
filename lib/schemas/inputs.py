@@ -11,7 +11,7 @@ GCS paths:
     cbb/odds.json
     cbb/evanmiya.json   (disabled scraper — schema defined for future use)
     tennis/odds.json
-    tennis/players.json
+    tennis/players.json     ← raw_stats (float) as of 2026-03-23; was ratings (int)
     tennis/matches.json (disabled scraper — schema defined for future use)
 """
 
@@ -59,10 +59,6 @@ class KenPomSnapshot(BaseModel):
 
 # ---------------------------------------------------------------------------
 # CBB — ESPN scores (cbb/scores.json)
-# Actual fields: espn_id, date, state, completed,
-#                t1_name, t1_score, t1_winner,
-#                t2_name, t2_score, t2_winner,
-#                source, fetched_at
 # ---------------------------------------------------------------------------
 
 class ESPNGame(BaseModel):
@@ -108,7 +104,6 @@ class ESPNSnapshot(BaseModel):
 
 # ---------------------------------------------------------------------------
 # CBB — Action Network odds (cbb/odds.json)
-# Top-level key is "odds" not "games"
 # ---------------------------------------------------------------------------
 
 class ActionNetworkGame(BaseModel):
@@ -121,7 +116,7 @@ class ActionNetworkGame(BaseModel):
     source: Optional[str] = None
     fetched_at: Optional[datetime] = None
 
-    model_config = {"extra": "allow"}  # absorb any extra fields gracefully
+    model_config = {"extra": "allow"}
 
     @field_validator("home_ml", "away_ml", mode="before")
     @classmethod
@@ -132,7 +127,7 @@ class ActionNetworkGame(BaseModel):
 class ActionNetworkSnapshot(BaseModel):
     updated: datetime
     source: Optional[str] = None
-    odds: Any = []                      # empty dict {} when no games, list when games exist
+    odds: Any = []
 
     @field_validator("odds", mode="before")
     @classmethod
@@ -237,8 +232,13 @@ class TennisOddsSnapshot(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Tennis — TennisAbstract players (tennis/players.json)
-# Actual fields: name, slug, country, emoji, rank, lastUpdated,
-#                ratings, elo, recentMatches, dataAvailability
+#
+# Schema change 2026-03-23:
+#   - Added `raw_stats`: raw float percentages from the scraper
+#   - Retained `ratings` as Optional for backward compatibility with any
+#     GCS files written before this change (will be None for new files)
+#   - `wta_archetype_classifier.py` uses raw_stats when present,
+#     falls back to ratings for legacy files
 # ---------------------------------------------------------------------------
 
 class TennisPlayer(BaseModel):
@@ -248,7 +248,8 @@ class TennisPlayer(BaseModel):
     emoji: Optional[str] = None
     rank: Optional[int] = None
     lastUpdated: Optional[str] = None
-    ratings: Optional[dict] = None
+    raw_stats: Optional[dict[str, Optional[float]]] = None   # new: raw float stats
+    ratings: Optional[dict] = None                           # legacy: pre-scored 1-10 ints
     elo: Optional[dict] = None
     recentMatches: Optional[list] = None
     dataAvailability: Optional[dict] = None
@@ -256,22 +257,14 @@ class TennisPlayer(BaseModel):
     model_config = {"extra": "allow"}  # absorb any future TA fields
 
     @property
-    def serve_rating(self) -> Optional[float]:
-        """Pull serve rating from ratings dict if available."""
-        if self.ratings:
-            return self.ratings.get("serve")
-        return None
-
-    @property
-    def return_rating(self) -> Optional[float]:
-        if self.ratings:
-            return self.ratings.get("return")
-        return None
+    def has_raw_stats(self) -> bool:
+        """True if this player record uses the new raw_stats format."""
+        return self.raw_stats is not None and len(self.raw_stats) > 0
 
     @property
     def elo_rating(self) -> Optional[float]:
         if self.elo:
-            return self.elo.get("overall")
+            return self.elo.get("elo")
         return None
 
 
