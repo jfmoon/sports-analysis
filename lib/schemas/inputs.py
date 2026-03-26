@@ -5,19 +5,29 @@ Each model mirrors the exact JSON structure written by the scraper layer.
 Use these to validate and parse raw GCS snapshot data before any processing.
 
 Source bucket: sports-data-scraper-491116
+
 GCS paths:
-    cbb/kenpom.json
-    cbb/scores.json
-    cbb/odds.json
-    cbb/evanmiya.json   (disabled scraper — schema defined for future use)
-    tennis/odds.json
-    tennis/players.json     ← raw_stats (float) as of 2026-03-23; was ratings (int)
-    tennis/matches.json (disabled scraper — schema defined for future use)
+  cbb/kenpom.json
+  cbb/scores.json
+  cbb/odds.json
+  cbb/evanmiya.json     (disabled scraper — schema defined for future use)
+  tennis/odds.json
+  tennis/players.json   ← raw_stats (float) as of 2026-03-23; was ratings (int)
+  tennis/matches.json   (disabled scraper — schema defined for future use)
+  mlb/probables.json
+  mlb/pitchers.json
+  mlb/teams.json
+  mlb/bullpen.json
+  mlb/statcast_pitchers.json
+  mlb/statcast_hitters.json
+  mlb/weather.json
+  mlb/lineups.json
+  mlb/odds.json
 """
 
 from datetime import datetime
-from typing import Optional, Any
-from pydantic import BaseModel, field_validator
+from typing import Optional, Any, List
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +74,7 @@ class KenPomSnapshot(BaseModel):
 class ESPNGame(BaseModel):
     espn_id: str
     date: Optional[str] = None
-    state: Optional[str] = None         # "pre" | "in" | "post"
+    state: Optional[str] = None        # "pre" | "in" | "post"
     completed: Optional[bool] = None
     t1_name: str                        # home team
     t1_score: Optional[int] = None
@@ -115,7 +125,6 @@ class ActionNetworkGame(BaseModel):
     away_ml: Optional[float] = None
     source: Optional[str] = None
     fetched_at: Optional[datetime] = None
-
     model_config = {"extra": "allow"}
 
     @field_validator("home_ml", "away_ml", mode="before")
@@ -248,13 +257,12 @@ class TennisPlayer(BaseModel):
     emoji: Optional[str] = None
     rank: Optional[int] = None
     lastUpdated: Optional[str] = None
-    raw_stats: Optional[dict[str, Optional[float]]] = None   # new: raw float stats
-    ratings: Optional[dict] = None                           # legacy: pre-scored 1-10 ints
+    raw_stats: Optional[dict[str, Optional[float]]] = None  # new: raw float stats
+    ratings: Optional[dict] = None                          # legacy: pre-scored 1-10 ints
     elo: Optional[dict] = None
     recentMatches: Optional[list] = None
     dataAvailability: Optional[dict] = None
-
-    model_config = {"extra": "allow"}  # absorb any future TA fields
+    model_config = {"extra": "allow"}                       # absorb any future TA fields
 
     @property
     def has_raw_stats(self) -> bool:
@@ -306,15 +314,372 @@ class SofascoreSnapshot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# MLB — Probables (mlb/probables.json)
+# ---------------------------------------------------------------------------
+
+class MlbGame(BaseModel):
+    game_id: str
+    date: str
+    commence_time: str
+    away_team: str
+    home_team: str
+    away_pitcher: Optional[str] = None
+    home_pitcher: Optional[str] = None
+    away_hand: Optional[str] = None         # "L" | "R" | "S" | None
+    home_hand: Optional[str] = None
+    away_pitcher_id: Optional[int] = None   # MLB Stats API player ID
+    home_pitcher_id: Optional[int] = None
+    away_confirmed: bool = False
+    home_confirmed: bool = False
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbProbablesSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    game_count: Optional[int] = None
+    games: List[MlbGame] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Fangraphs pitchers (mlb/pitchers.json)
+# ---------------------------------------------------------------------------
+
+class MlbPitcher(BaseModel):
+    pitcher_id: str
+    name: str
+    team: str
+    throws: str                             # "L" | "R" | "S"
+    season: int
+    games: Optional[int] = None
+    games_started: Optional[int] = None
+    innings_pitched: Optional[float] = None
+    era: Optional[float] = None
+    fip: Optional[float] = None
+    xfip: Optional[float] = None
+    siera: Optional[float] = None
+    whip: Optional[float] = None
+    k_pct: Optional[float] = None
+    bb_pct: Optional[float] = None
+    k_minus_bb_pct: Optional[float] = None
+    gb_pct: Optional[float] = None
+    hard_hit_pct: Optional[float] = None
+    barrel_pct: Optional[float] = None
+    hr_per_9: Optional[float] = None
+    swstr_pct: Optional[float] = None
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbPitchersSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    season: Optional[int] = None
+    pitcher_count: Optional[int] = None
+    pitchers: List[MlbPitcher] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Fangraphs team splits (mlb/teams.json)
+# ---------------------------------------------------------------------------
+
+class MlbTeamSplit(BaseModel):
+    team: str
+    season: int
+    split: str                              # "overall" | "vs_lhp" | "vs_rhp"
+    pa: Optional[int] = None
+    avg: Optional[float] = None
+    obp: Optional[float] = None
+    slg: Optional[float] = None
+    ops: Optional[float] = None
+    iso: Optional[float] = None
+    woba: Optional[float] = None
+    # NOTE: wrc_plus is already park-adjusted.
+    # Never use in park-factor or run-environment calculations — display only.
+    wrc_plus: Optional[int] = None
+    k_pct: Optional[float] = None
+    bb_pct: Optional[float] = None
+    barrel_pct: Optional[float] = None
+    hard_hit_pct: Optional[float] = None
+    gb_pct: Optional[float] = None
+    fb_pct: Optional[float] = None
+    swstr_pct: Optional[float] = None
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbTeamsSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    team_count: Optional[int] = None
+    season: Optional[int] = None
+    splits_available: List[str] = Field(default_factory=list)
+    teams: List[MlbTeamSplit] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Fangraphs bullpen (mlb/bullpen.json)
+# ---------------------------------------------------------------------------
+
+class MlbBullpen(BaseModel):
+    team: str
+    season: int
+    innings_pitched: Optional[float] = None
+    games: Optional[int] = None
+    era: Optional[float] = None
+    fip: Optional[float] = None
+    xfip: Optional[float] = None
+    siera: Optional[float] = None
+    whip: Optional[float] = None
+    k_pct: Optional[float] = None
+    bb_pct: Optional[float] = None
+    k_minus_bb_pct: Optional[float] = None
+    gb_pct: Optional[float] = None
+    hard_hit_pct: Optional[float] = None
+    barrel_pct: Optional[float] = None
+    hr_per_9: Optional[float] = None
+    lob_pct: Optional[float] = None
+    swstr_pct: Optional[float] = None
+
+
+class MlbBullpenSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    team_count: Optional[int] = None
+    season: Optional[int] = None
+    pitching_role: Optional[str] = None    # "reliever"
+    bullpens: List[MlbBullpen] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Baseball Savant statcast pitchers (mlb/statcast_pitchers.json)
+# ---------------------------------------------------------------------------
+
+class MlbStatcastPitcher(BaseModel):
+    # player_id is str in GCS (scraper casts from int at write time).
+    # Join via: str(probables.away_pitcher_id) == statcast_pitcher.player_id
+    player_id: str
+    name: str
+    team: str
+    season: int
+    pa: Optional[int] = None
+    xera: Optional[float] = None
+    xba: Optional[float] = None
+    xslg: Optional[float] = None
+    xwoba: Optional[float] = None
+    whiff_pct: Optional[float] = None
+    k_pct: Optional[float] = None
+    bb_pct: Optional[float] = None
+    barrel_pct: Optional[float] = None
+    hard_hit_pct: Optional[float] = None
+    avg_exit_velocity: Optional[float] = None
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbStatcastPitchersSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    season: Optional[int] = None
+    pitcher_count: Optional[int] = None
+    pitchers: List[MlbStatcastPitcher] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Baseball Savant statcast hitters (mlb/statcast_hitters.json)
+# ---------------------------------------------------------------------------
+
+class MlbStatcastHitter(BaseModel):
+    player_id: str
+    name: str
+    team: str
+    season: int
+    pa: Optional[int] = None
+    xba: Optional[float] = None
+    xslg: Optional[float] = None
+    xwoba: Optional[float] = None
+    barrel_pct: Optional[float] = None
+    hard_hit_pct: Optional[float] = None
+    avg_exit_velocity: Optional[float] = None
+    whiff_pct: Optional[float] = None
+    k_pct: Optional[float] = None
+    bb_pct: Optional[float] = None
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbStatcastHittersSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    season: Optional[int] = None
+    hitter_count: Optional[int] = None
+    hitters: List[MlbStatcastHitter] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Open-Meteo weather (mlb/weather.json)
+# ---------------------------------------------------------------------------
+
+class MlbGameWeather(BaseModel):
+    game_id: str
+    date: str
+    away_team: str
+    home_team: str
+    stadium: str
+    city: str
+    state: str
+    is_dome: bool
+    is_retractable: bool
+    # All fields below are None when is_dome=True (Tropicana Field only).
+    temperature_f: Optional[float] = None
+    wind_mph: Optional[float] = None
+    wind_direction: Optional[str] = None    # 8-pt compass: N/NE/E/SE/S/SW/W/NW
+    precip_pct: Optional[float] = None
+    humidity_pct: Optional[float] = None
+    conditions: Optional[str] = None
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbWeatherSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    game_count: Optional[int] = None
+    games: List[MlbGameWeather] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — MLB Stats API lineups (mlb/lineups.json)
+# ---------------------------------------------------------------------------
+
+class MlbStarter(BaseModel):
+    batting_order: int
+    player_name: str
+    player_id: int
+    position: str
+    bats: Optional[str] = None             # "L" | "R" | "S" | None
+
+
+class MlbLineupGame(BaseModel):
+    game_id: str
+    date: str
+    commence_time: str
+    away_team: str
+    home_team: str
+    away_confirmed: bool = False
+    home_confirmed: bool = False
+    away_lineup: List[MlbStarter] = Field(default_factory=list)
+    home_lineup: List[MlbStarter] = Field(default_factory=list)
+    source: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class MlbLineupsSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    game_count: Optional[int] = None
+    games: List[MlbLineupGame] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MLB — Action Network odds (mlb/odds.json)
+# ---------------------------------------------------------------------------
+
+class MlbOddsGame(BaseModel):
+    # game_id normalized to str at load time via field_validator.
+    # Source is int from Action Network — never join on this ID across snapshots.
+    # Odds join key is (away_team, home_team) raw Action Network strings.
+    game_id: str
+    sport: str
+    status: str
+    commence_time: str
+    away_team: str          # raw Action Network string — no canonical crosswalk yet
+    home_team: str
+    bookmaker: str
+    away_ml: int
+    home_ml: int
+    away_spread: Optional[float] = None
+    away_spread_odds: Optional[int] = None
+    home_spread: Optional[float] = None
+    home_spread_odds: Optional[int] = None
+    total: Optional[float] = None
+    over_odds: Optional[int] = None
+    under_odds: Optional[int] = None
+
+    @field_validator("game_id", mode="before")
+    @classmethod
+    def coerce_game_id_to_str(cls, v: object) -> str:
+        return str(v)
+
+
+class MlbOddsSnapshot(BaseModel):
+    schema_version: int = 0
+    generated_at: Optional[str] = None
+    scraper_key: Optional[str] = None
+    record_count: Optional[int] = None
+    warnings: List[str] = Field(default_factory=list)
+    updated: Optional[str] = None
+    sport: Optional[str] = None
+    game_count: Optional[int] = None
+    odds: List[MlbOddsGame] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # GCS path → snapshot model registry
+# ALL new paths must be registered here before any job can read them.
 # ---------------------------------------------------------------------------
 
 GCS_PATH_REGISTRY: dict[str, type] = {
-    "cbb/kenpom.json":      KenPomSnapshot,
-    "cbb/scores.json":      ESPNSnapshot,
-    "cbb/odds.json":        ActionNetworkSnapshot,
-    "cbb/evanmiya.json":    EvanMiyaSnapshot,
-    "tennis/odds.json":     TennisOddsSnapshot,
-    "tennis/players.json":  TennisAbstractSnapshot,
-    "tennis/matches.json":  SofascoreSnapshot,
+    # CBB
+    "cbb/kenpom.json":              KenPomSnapshot,
+    "cbb/scores.json":              ESPNSnapshot,
+    "cbb/odds.json":                ActionNetworkSnapshot,
+    "cbb/evanmiya.json":            EvanMiyaSnapshot,
+    # Tennis
+    "tennis/odds.json":             TennisOddsSnapshot,
+    "tennis/players.json":          TennisAbstractSnapshot,
+    "tennis/matches.json":          SofascoreSnapshot,
+    # MLB
+    "mlb/probables.json":           MlbProbablesSnapshot,
+    "mlb/pitchers.json":            MlbPitchersSnapshot,
+    "mlb/teams.json":               MlbTeamsSnapshot,
+    "mlb/bullpen.json":             MlbBullpenSnapshot,
+    "mlb/statcast_pitchers.json":   MlbStatcastPitchersSnapshot,
+    "mlb/statcast_hitters.json":    MlbStatcastHittersSnapshot,
+    "mlb/weather.json":             MlbWeatherSnapshot,
+    "mlb/lineups.json":             MlbLineupsSnapshot,
+    "mlb/odds.json":                MlbOddsSnapshot,
 }
