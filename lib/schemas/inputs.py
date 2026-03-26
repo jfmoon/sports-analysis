@@ -405,7 +405,7 @@ class MlbTeamSplit(BaseModel):
     woba: Optional[float] = None
     # NOTE: wrc_plus is already park-adjusted.
     # Never use in park-factor or run-environment calculations — display only.
-    wrc_plus: Optional[int] = None
+    wrc_plus: Optional[float] = None
     k_pct: Optional[float] = None
     bb_pct: Optional[float] = None
     barrel_pct: Optional[float] = None
